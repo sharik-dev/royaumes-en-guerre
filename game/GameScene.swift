@@ -1,309 +1,154 @@
-import SpriteKit
+// BotAI.swift (in GameScene.swift) — Intelligence artificielle
+// Difficulté: Facile / Moyen / Difficile
 
-class GameScene: SKScene {
+import Foundation
 
-    let etat = EtatPartie.shared
+@MainActor
+struct BotAI {
 
-    // Computed tile size from screen dimensions
-    var tailleCase: CGFloat = 56
+    // MARK: - Point d'entrée
 
-    var offsetX: CGFloat = 0
-    var offsetY: CGFloat = 0
+    static func jouerTour(faction: Faction, difficulte: Difficulte, etat: EtatPartie) {
+        // 1. Recrutement
+        let renforts = etat.calculerRenforts(faction: faction)
+        deployer(faction: faction, nombre: renforts, difficulte: difficulte, etat: etat)
 
-    // Sprite layers
-    var coucheGrille    = SKNode()
-    var coucheBatiments = SKNode()
-    var coucheUnites    = SKNode()
-    var coucheSurligne  = SKNode()
+        // 2. Attaques (avec délai pour l'effet visuel)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            attaquer(faction: faction, difficulte: difficulte, etat: etat)
 
-    // Stored sprites by id for update without full redraw
-    var spritesBatiments: [UUID: SKNode] = [:]
-    var spritesUnites:    [UUID: SKNode] = [:]
-
-    private var rafraichirToken: Any?
-
-    // MARK: - Setup
-
-    override func didMove(to view: SKView) {
-        backgroundColor = SKColor(red: 0.38, green: 0.62, blue: 0.28, alpha: 1)
-        calculerLayout()
-
-        coucheGrille.zPosition    = 0
-        coucheSurligne.zPosition  = 1
-        coucheBatiments.zPosition = 2
-        coucheUnites.zPosition    = 3
-        addChild(coucheGrille)
-        addChild(coucheSurligne)
-        addChild(coucheBatiments)
-        addChild(coucheUnites)
-
-        dessinerGrille()
-        rafraichirTout()
-
-        // Observe state changes triggered by EtatPartie
-        rafraichirToken = NotificationCenter.default.addObserver(
-            forName: .jeuRafraichir, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.rafraichirTout()
-        }
-    }
-
-    deinit {
-        if let t = rafraichirToken { NotificationCenter.default.removeObserver(t) }
-    }
-
-    func calculerLayout() {
-        let margin: CGFloat = 12
-        let disponibleW = size.width  - margin * 2
-        let disponibleH = size.height - 220 // reserve pour HUD haut+bas
-        let tileParW = disponibleW / CGFloat(etat.cols)
-        let tileParH = disponibleH / CGFloat(etat.rows)
-        tailleCase = min(tileParW, tileParH)
-        let largeurGrille = tailleCase * CGFloat(etat.cols)
-        offsetX = (size.width  - largeurGrille) / 2
-        offsetY = 110 // espace pour le panel du bas (SafeArea + boutons)
-    }
-
-    // MARK: - Coordinate helpers
-
-    func posScene(_ pos: Position) -> CGPoint {
-        CGPoint(
-            x: offsetX + CGFloat(pos.col) * tailleCase + tailleCase / 2,
-            y: offsetY + CGFloat(etat.rows - 1 - pos.row) * tailleCase + tailleCase / 2
-        )
-    }
-
-    func posGrille(_ point: CGPoint) -> Position? {
-        let col = Int((point.x - offsetX) / tailleCase)
-        let rowInv = Int((point.y - offsetY) / tailleCase)
-        let row = etat.rows - 1 - rowInv
-        guard col >= 0, col < etat.cols, row >= 0, row < etat.rows else { return nil }
-        return Position(col: col, row: row)
-    }
-
-    // MARK: - Grid drawing
-
-    func dessinerGrille() {
-        coucheGrille.removeAllChildren()
-        for col in 0..<etat.cols {
-            for row in 0..<etat.rows {
-                let x = offsetX + CGFloat(col) * tailleCase
-                let y = offsetY + CGFloat(etat.rows - 1 - row) * tailleCase
-                let rect = CGRect(x: x, y: y, width: tailleCase, height: tailleCase)
-                let tile = SKShapeNode(rect: rect)
-                let clair = (col + row) % 2 == 0
-                tile.fillColor   = clair
-                    ? SKColor(red: 0.56, green: 0.80, blue: 0.42, alpha: 1)
-                    : SKColor(red: 0.46, green: 0.70, blue: 0.34, alpha: 1)
-                tile.strokeColor = SKColor(white: 0.25, alpha: 0.35)
-                tile.lineWidth   = 0.5
-                coucheGrille.addChild(tile)
+            // 3. Fin du tour
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                etat.passerAuTourSuivant()
             }
         }
     }
 
-    // MARK: - Full refresh
+    // MARK: - Déploiement
 
-    func rafraichirTout() {
-        coucheBatiments.removeAllChildren()
-        coucheUnites.removeAllChildren()
-        spritesBatiments.removeAll()
-        spritesUnites.removeAll()
-        effacerSurlignage()
+    private static func deployer(faction: Faction, nombre: Int, difficulte: Difficulte, etat: EtatPartie) {
+        let owned = etat.territoires.values.filter { $0.proprietaire == faction }.map { $0.id }
+        guard !owned.isEmpty else { return }
 
-        for bat in etat.batiments where bat.estDebout {
-            let noeud = creerNoeudEntite(image: bat.nomImage, pv: bat.pvActuels, pvMax: bat.type.pvMax, grise: false)
-            noeud.position = posScene(bat.position)
-            coucheBatiments.addChild(noeud)
-            spritesBatiments[bat.id] = noeud
-        }
+        var remaining = nombre
+        while remaining > 0 {
+            let targetId: String
+            switch difficulte {
+            case .facile:
+                // Territoire aléatoire
+                targetId = owned.randomElement()!
 
-        for unite in etat.unites where unite.estVivant {
-            let noeud = creerNoeudEntite(image: unite.nomImage, pv: unite.pvActuels, pvMax: unite.type.pvMax, grise: unite.aAgit)
-            noeud.position = posScene(unite.position)
-            coucheUnites.addChild(noeud)
-            spritesUnites[unite.id] = noeud
-        }
-
-        rafraichirSurlignage()
-    }
-
-    // MARK: - Entity node
-
-    func creerNoeudEntite(image: String, pv: Int, pvMax: Int, grise: Bool) -> SKNode {
-        let container = SKNode()
-        let t = tailleCase * 0.82
-
-        if UIImage(named: image) != nil {
-            let sprite = SKSpriteNode(imageNamed: image)
-            sprite.size = CGSize(width: t, height: t)
-            sprite.alpha = grise ? 0.45 : 1.0
-            container.addChild(sprite)
-        } else {
-            // Fallback: forme colorée avec initiale
-            let shape = SKShapeNode(rectOf: CGSize(width: t * 0.85, height: t * 0.85), cornerRadius: 6)
-            shape.fillColor   = grise ? .darkGray : SKColor(red: 0.9, green: 0.6, blue: 0.1, alpha: 1)
-            shape.strokeColor = .white
-            shape.lineWidth   = 1.5
-            container.addChild(shape)
-        }
-
-        // Barre de vie
-        let barW: CGFloat = tailleCase * 0.70
-        let barH: CGFloat = 5
-        let barY: CGFloat = -(t / 2) - 4
-
-        let fond = SKShapeNode(rectOf: CGSize(width: barW, height: barH), cornerRadius: 2)
-        fond.fillColor   = SKColor(red: 0.7, green: 0.1, blue: 0.1, alpha: 1)
-        fond.strokeColor = .clear
-        fond.position    = CGPoint(x: 0, y: barY)
-        fond.zPosition   = 1
-        container.addChild(fond)
-
-        let ratio  = CGFloat(pv) / CGFloat(max(pvMax, 1))
-        let pleinW = barW * ratio
-        let plein  = SKShapeNode(rectOf: CGSize(width: pleinW, height: barH), cornerRadius: 2)
-        plein.fillColor   = ratio > 0.5 ? SKColor(red: 0.2, green: 0.8, blue: 0.2, alpha: 1) : SKColor(red: 0.9, green: 0.7, blue: 0.1, alpha: 1)
-        plein.strokeColor = .clear
-        plein.position    = CGPoint(x: -(barW - pleinW) / 2, y: barY)
-        plein.zPosition   = 2
-        container.addChild(plein)
-
-        return container
-    }
-
-    // MARK: - Highlighting
-
-    func rafraichirSurlignage() {
-        effacerSurlignage()
-        guard case .uniteSelectionnee(let u) = etat.selection else { return }
-
-        // Case de l'unité sélectionnée
-        surligner([u.position], couleur: SKColor.white.withAlphaComponent(0.5))
-        // Cases de déplacement
-        if !u.aAgit {
-            surligner(etat.casesAccessibles(pour: u), couleur: SKColor.cyan.withAlphaComponent(0.38))
-            surligner(etat.ciblesAttaquables(pour: u), couleur: SKColor.red.withAlphaComponent(0.48))
-        }
-    }
-
-    func surligner(_ cases: [Position], couleur: SKColor) {
-        for pos in cases {
-            let rect = CGRect(x: -tailleCase/2, y: -tailleCase/2, width: tailleCase, height: tailleCase)
-            let shape = SKShapeNode(rect: rect, cornerRadius: 4)
-            shape.fillColor   = couleur
-            shape.strokeColor = couleur.withAlphaComponent(0.85)
-            shape.lineWidth   = 2
-            shape.position    = posScene(pos)
-            coucheSurligne.addChild(shape)
-        }
-    }
-
-    func effacerSurlignage() {
-        coucheSurligne.removeAllChildren()
-    }
-
-    // MARK: - Touch handling
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first else { return }
-        guard etat.etat == .tourJoueur else { return }
-
-        let location = touch.location(in: self)
-        guard let pos = posGrille(location) else {
-            etat.selection = .rien
-            effacerSurlignage()
-            return
-        }
-
-        switch etat.selection {
-
-        case .rien:
-            selectionnerCellule(pos)
-
-        case .uniteSelectionnee(let unite):
-            if unite.aAgit {
-                // Tenter de re-sélectionner autre unité
-                if let autre = etat.uniteEn(pos), autre.faction == .chevaliers, autre.id != unite.id {
-                    etat.selection = .uniteSelectionnee(autre)
-                    etat.message  = "\(autre.type.nom) — PV \(autre.pvActuels)/\(autre.type.pvMax)"
-                    rafraichirSurlignage()
-                } else {
-                    etat.selection = .rien
-                    effacerSurlignage()
-                    etat.message  = "Cette unité a déjà agi."
+            case .moyen:
+                // Préfère les territoires frontaliers
+                let borders = owned.filter { id in
+                    etat.territoires[id]?.voisins.contains(where: {
+                        etat.territoires[$0]?.proprietaire != faction
+                    }) ?? false
                 }
-                return
+                targetId = borders.randomElement() ?? owned.randomElement()!
+
+            case .difficile:
+                // Renforce le territoire frontalier le plus exposé (ratio armées/voisins ennemis)
+                let scored = owned.compactMap { id -> (String, Double)? in
+                    guard let t = etat.territoires[id] else { return nil }
+                    let enemyCount = t.voisins.filter {
+                        etat.territoires[$0]?.proprietaire != faction
+                    }.count
+                    guard enemyCount > 0 else { return nil }
+                    let score = Double(enemyCount) / Double(t.armees)
+                    return (id, score)
+                }.sorted { $0.1 > $1.1 }
+                targetId = scored.first?.0 ?? owned.randomElement()!
             }
+            etat.territoires[targetId]?.armees += 1
+            remaining -= 1
+        }
+        etat.refreshMap.toggle()
+    }
 
-            // Attaque ?
-            let cibles = etat.ciblesAttaquables(pour: unite)
-            if cibles.contains(pos) {
-                etat.attaquer(attaquant: unite, ciblePos: pos)
-                etat.selection = .rien
-                rafraichirTout()
-                return
+    // MARK: - Attaque
+
+    private static func attaquer(faction: Faction, difficulte: Difficulte, etat: EtatPartie) {
+        let maxAttaques = difficulte.maxAttaquesParTour
+        var count = 0
+
+        while count < maxAttaques {
+            guard let (srcId, tgtId) = meilleureAttaque(faction: faction, difficulte: difficulte, etat: etat) else { break }
+
+            guard var src = etat.territoires[srcId],
+                  var tgt = etat.territoires[tgtId],
+                  src.armees > 1 else { break }
+
+            let r = resoudreCombat(attaque: src.armees, defense: tgt.armees)
+            src.armees -= r.pertesAttaquant
+            tgt.armees -= r.pertesDefenseur
+
+            if r.conquis {
+                let mvt = max(1, src.armees - 1)
+                tgt.armees       = mvt
+                tgt.proprietaire = faction
+                src.armees      -= mvt
+                etat.message = "\(faction.nomAffichage) conquiert \(tgt.nom) !"
             }
+            etat.territoires[srcId] = src
+            etat.territoires[tgtId] = tgt
+            count += 1
+        }
 
-            // Déplacement ?
-            let accessibles = etat.casesAccessibles(pour: unite)
-            if accessibles.contains(pos) {
-                let anciennePos = unite.position
-                unite.position = pos
-                unite.aAgit   = true
-                etat.message  = "\(unite.type.nom) déplacé"
-                animerDeplacement(uniteId: unite.id, de: posScene(anciennePos), vers: posScene(pos))
-                etat.selection = .rien
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    self.rafraichirTout()
-                    self.etat.sceneNeedsRefresh.toggle()
-                }
-                return
+        etat.verifierVictoire()
+        etat.refreshMap.toggle()
+    }
+
+    // MARK: - Sélection de la meilleure attaque
+
+    private static func meilleureAttaque(
+        faction: Faction,
+        difficulte: Difficulte,
+        etat: EtatPartie
+    ) -> (String, String)? {
+        // Collecte tous les paires (source, cible) possibles avec leur ratio d'armées
+        var candidates: [(String, String, Double)] = []
+
+        for (srcId, src) in etat.territoires where src.proprietaire == faction && src.armees > 1 {
+            for tgtId in src.voisins {
+                guard let tgt = etat.territoires[tgtId], tgt.proprietaire != faction else { continue }
+                let ratio = Double(src.armees) / Double(max(1, tgt.armees))
+                candidates.append((srcId, tgtId, ratio))
             }
+        }
 
-            // Re-sélection d'une autre entité
-            selectionnerCellule(pos)
+        guard !candidates.isEmpty else { return nil }
 
-        case .batimentSelectionne:
-            // Tap ailleurs → désélectionner
-            etat.selection = .rien
-            effacerSurlignage()
-            selectionnerCellule(pos)
+        switch difficulte {
+        case .facile:
+            // Attaque aléatoire, même défavorable
+            return candidates.randomElement().map { ($0.0, $0.1) }
+
+        case .moyen:
+            // N'attaque que si ratio > 1.4
+            let favorable = candidates.filter { $0.2 > 1.4 }
+            if favorable.isEmpty { return nil }
+            return favorable.randomElement().map { ($0.0, $0.1) }
+
+        case .difficile:
+            // Choisit le meilleur ratio (>1.2), préfère conquérir un continent
+            let viable = candidates.filter { $0.2 > 1.2 }.sorted { $0.2 > $1.2 }
+            // Priorité aux territoires qui complètent un continent
+            if let continentPriority = viable.first(where: { srcId, tgtId, _ in
+                continentBonusAttack(faction: faction, tgtId: tgtId, etat: etat)
+            }) {
+                return (continentPriority.0, continentPriority.1)
+            }
+            return viable.first.map { ($0.0, $0.1) }
         }
     }
 
-    func selectionnerCellule(_ pos: Position) {
-        if let unite = etat.uniteEn(pos), unite.faction == .chevaliers {
-            etat.selection = .uniteSelectionnee(unite)
-            etat.message  = "\(unite.type.nom) — PV \(unite.pvActuels)/\(unite.type.pvMax) | Mouv.\(unite.type.deplacement) Portée \(unite.type.portee)"
-            rafraichirSurlignage()
-        } else if let bat = etat.batimentEn(pos), bat.faction == .chevaliers {
-            etat.selection = .batimentSelectionne(bat)
-            etat.message  = "\(bat.type.nom) — PV \(bat.pvActuels)/\(bat.type.pvMax). Touchez pour recruter."
-            effacerSurlignage()
-        } else {
-            etat.selection = .rien
-            effacerSurlignage()
-        }
+    /// Vérifie si conquérir `tgtId` complèterait un continent pour `faction`
+    private static func continentBonusAttack(faction: Faction, tgtId: String, etat: EtatPartie) -> Bool {
+        guard let tgt = etat.territoires[tgtId] else { return false }
+        let contId = tgt.continentId
+        let contTerrs = etat.territoires.values.filter { $0.continentId == contId }
+        let owned = contTerrs.filter { $0.proprietaire == faction || $0.id == tgtId }
+        return owned.count == contTerrs.count
     }
-
-    // MARK: - Move animation
-
-    func animerDeplacement(uniteId: UUID, de: CGPoint, vers: CGPoint) {
-        guard let noeud = spritesUnites[uniteId] else { return }
-        noeud.position = de
-        noeud.run(.move(to: vers, duration: 0.22))
-    }
-
-    override func didChangeSize(_ oldSize: CGSize) {
-        calculerLayout()
-        dessinerGrille()
-        rafraichirTout()
-    }
-}
-
-// MARK: - Notification name
-
-extension Notification.Name {
-    static let jeuRafraichir = Notification.Name("jeuRafraichir")
 }
