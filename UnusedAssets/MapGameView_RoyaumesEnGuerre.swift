@@ -13,7 +13,7 @@ import CoreLocation
 
 // MARK: - Token Mapbox (à modifier)
 
-let MAPBOX_ACCESS_TOKEN = "VOTRE_TOKEN_MAPBOX_ICI"
+let MAPBOX_ACCESS_TOKEN = Bundle.main.object(forInfoDictionaryKey: "MBXAccessToken") as? String ?? ""
 
 // MARK: - MapGameView
 

@@ -6,3 +6,6 @@ DerivedData/
 build/
 *.o
 *.d
+
+# Secrets — ne jamais committer
+Config.xcconfig

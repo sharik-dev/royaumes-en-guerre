@@ -3,6 +3,10 @@
 <plist version="1.0">
 <dict>
 	<key>MBXAccessToken</key>
-	<string>VOTRE_TOKEN_MAPBOX_ICI</string>
+	<string>$(MAPBOX_ACCESS_TOKEN)</string>
+	<key>NSMotionUsageDescription</key>
+	<string>WalkTheWorld utilise le mouvement de votre téléphone pour détecter et valider vos pas en temps réel.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>WalkTheWorld utilise votre position GPS pour définir votre point de départ sur le globe.</string>
 </dict>
 </plist>
